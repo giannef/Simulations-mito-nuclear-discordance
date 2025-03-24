@@ -1,0 +1,199 @@
+initialize() {
+	// SLiM options
+	initializeSLiMModelType("nonWF");
+	initializeSLiMOptions(dimensionality="xy"); // Two-dimensional spatial model
+	initializeSex("A");
+	
+	// Constant are defined in the terminal with the option "-d"
+	if (exists("slimgui")){
+		defineConstant("seed", 1);
+		defineConstant("K", 20000); // carrying-capacity density
+		defineConstant("Sf", 0.004); // Female dispersal
+		defineConstant("Sm", 0.004); // Male dispersal
+		defineConstant("S", 0.015);   // SIGMA_S, the spatial interaction width
+		defineConstant("Md", 0.008);   // SIGMA_S, the spatial interaction width
+	}
+	setSeed(seed);
+	
+	// Definition of the genomic elements
+	initializeMutationRate(c(1e-8, 1e-7), c(1600008, 1616008)); // Mutation rate for the nuclear and the mitochondrial genome
+	initializeMutationType("m1", 0.5, "f", 0.0); // Nuclear mutations
+	m1.convertToSubstitution = T;
+	initializeMutationType("m2", 1.0, "f", 0.0); // Mitochondrial mutations
+	m2.convertToSubstitution = T;
+	
+	initializeGenomicElementType("g1", m1, 1.0); // Nuclear genome
+	initializeGenomicElementType("g2", m2, 1.0); // Mitochondrial genome
+	for (i in 1:10){
+		initializeGenomicElement(g1, ((i-1)*160000)+(i-1), (i*160000)+(i-2) ); // Nuclear genome
+	}
+	initializeGenomicElement(g2, 1600009, 1616008); // Mitochondrial genome
+	initializeRecombinationRate(c(1e-8, 0.5, 1e-8, 0.5, 1e-8, 0.5, 1e-8, 0.5, 1e-8, 0.5, 1e-8, 0.5 ,1e-8, 0.5, 1e-8, 0.5, 1e-8, 0.5, 1e-8, 0.5, 0), c(159999, 160000, 320000, 320001, 480001, 480002, 640002, 640003, 800003, 800004, 960004, 960005, 1120005, 1120006, 1280006, 1280007, 1440007, 1440008, 1600008, 1600009, 1616008)); 
+	
+	// Interactions
+	// spatial mate choice
+	initializeInteractionType(1, "xy", reciprocal=T, maxDistance = Md,  sexSegregation= "FM");
+	// Spatial competition between individuals
+	initializeInteractionType(2, "xy", reciprocal=T, maxDistance = S * 3);
+	i2.setInteractionFunction("n", 1.0, S );
+}
+
+1 early() {
+	// initialization of the population
+	sim.addSubpop("p1", K);
+	p1.individuals.setSpatialPosition(p1.pointUniform(p1.individualCount));	// random initial positions
+}
+
+2: first(){
+	i1.evaluate(p1); // spatial mate choice interaction gets evaluated
+}
+
+//////////////////
+// REPRODUCTION //
+//////////////////
+
+1: 200000 reproduction(NULL, "F") {
+	
+	female=p1.sampleIndividuals(1, sex="F"); // female individual selected randomly
+	male = i1.nearestInteractingNeighbors(female, 1); // male individuals selected according to spatial mate choice
+	
+//this part of the scripts defines the maternal inheritance of the mitochondrial genome ensuring the absence of linkage effects between the nuclear and mitochondrial genomes
+	breaks = c(159999, 320000, 480001, 640002, 800003, 960004, 1120005, 1280006, 1440007); 
+	
+	strandfemale = rbinom(1, 1, 0.5);
+	if (strandfemale == 0){
+		gen1 = female.genome1;
+		gen2 = female.genome2;}
+	if (strandfemale == 1){
+		gen1 = female.genome2;
+		gen2 = female.genome1;}
+	
+	if (strandfemale == 0 & size(breaks) %2 == 0.0)
+		breaks1 = c(breaks, 1600008, 1600009);
+	if (strandfemale == 0 & size(breaks) %2 != 0.0)
+		breaks1 = c(breaks, 1600008);
+	
+	if (strandfemale == 1 & size(breaks) %2 == 0.0)
+		breaks1 = c(breaks, 1600008);
+	if (strandfemale == 1 & size(breaks) %2 != 0.0)
+		breaks1 = c(breaks, 1600008, 1600009);
+	
+	strandmale = rbinom(1, 1, 0.5);
+	if (strandmale == 0){
+		gen3 = male.genome1;
+		gen4 = male.genome2;}
+	else {
+		gen3 = male.genome2;
+		gen4 = male.genome1;}
+	
+	if (male.size() > 0){
+		breaksm = sim.chromosome.drawBreakpoints(male);
+		offspring = subpop.addRecombinant(gen1, gen2, breaks1, gen3, gen4, breaksm);}
+	else
+		return;
+	
+// dispersal distance is defined according to offspring's sex
+	if (offspring.sex == "F"){
+		do{pos = female.spatialPosition + runif(2, (-Sf), Sf);
+			offspring.setSpatialPosition(pos);}
+		while (!p1.pointInBounds(pos));}
+	
+	if (offspring.sex == "M"){
+		do{pos = female.spatialPosition + runif(2, (-Sm), Sm);
+			offspring.setSpatialPosition(pos);}
+		while (!p1.pointInBounds(pos));}
+}
+
+
+1 : 200000 early() {
+	i2.evaluate(p1); // spatial competition interaction gets evaluated
+	
+	competition =  i2.localPopulationDensity(p1.individuals); // competition gets calculated according to population density
+
+	p1.individuals.fitnessScaling = (K / competition); // spatial competition provides density-dependent selection
+
+	//individuals older than 10 years are removed from the population
+	oldinds = p1.individuals[p1.individuals.age >=10];
+	oldinds.fitnessScaling = 0.0;
+	
+	// remove any new mutations added to mitochondrial genomes inherited by male parents
+	Mmuts = sim.mutationsOfType(m2);
+	sim.subpopulations.individuals.genome2.removeMutations(Mmuts);
+	
+	// remove mutations in the haploid genomes that have fixed reaching a frequency of 0.5
+	freqs = sim.mutationFrequencies(p1, Mmuts);
+	if (any(freqs >= 0.5))
+		sim.subpopulations.genomes.removeMutations(Mmuts[freqs >= 0.5], T);
+}
+
+//////////////
+// SAMPLING //
+//////////////
+
+1:200000 late () {
+	
+	if (sim.cycle % 200 != 0) // sampling happens every 200 generations
+		return;
+	
+	Sample=p1.sampleIndividuals(100);
+	
+	e = 0;
+	for (ind in Sample){
+		c = 0;
+		counter = e+1;
+		Sample2 = Sample[(e+1):99];
+		
+		for (ind2 in Sample2){
+			D1 = sqrt( (ind.x - ind2.x)^2 + (ind.y - ind2.y)^2 );			
+			Mmuts = sim.mutationsOfType(m2);
+			Nmuts = sim.mutationsOfType(m1);
+			
+			comb = rdunif(1, 1, 4);						
+			if (comb == 1){
+				Nmutations1=ind.genome1.mutationsOfType(m1);
+				Nmutations2=ind2.genome1.mutationsOfType(m1);}
+			
+			if (comb == 2){
+				Nmutations1=ind.genome2.mutationsOfType(m1);
+				Nmutations2=ind2.genome2.mutationsOfType(m1);}
+			
+			if (comb == 3){
+				Nmutations1=ind.genome1.mutationsOfType(m1);
+				Nmutations2=ind2.genome2.mutationsOfType(m1);}
+			
+			if (comb == 4){
+				Nmutations1=ind.genome2.mutationsOfType(m1);
+				Nmutations2=ind2.genome1.mutationsOfType(m1);}
+			
+			Mmutations1=ind.genome1.mutationsOfType(m2);
+			Mmutations2=ind2.genome1.mutationsOfType(m2);
+			
+			Nunshared= setSymmetricDifference(Nmutations1, Nmutations2);
+			Munshared= setSymmetricDifference(Mmutations1, Mmutations2);
+			
+			H = calcHeterozygosity(Sample.genome1, muts= sim.mutationsOfType(m2));
+			
+			
+			if (ind.index != ind2.index)
+				catn(sim.cycle + " ind"+e + " " + "ind"+counter + " " + D1 + " " + size(Nunshared) + " " + size(Munshared));
+			
+			c = c+1;
+			counter = counter +1;
+		}
+		if (e < 98)
+			e = e+1;
+	}
+
+// Statistics	
+	MeanNuMuts = mean(p1.individuals.countOfMutationsOfType(m1));
+	MeanMtMuts = mean(p1.individuals.countOfMutationsOfType(m2));
+	H = calcHeterozygosity(Sample.genome1, muts= sim.mutationsOfType(m2));
+	muts = NULL;
+	for (i in Sample){ muts = c(muts, size(i.genome1.mutationsOfType(m2)));}
+	M=sum(muts)/Sample.size();
+	catn (" ");
+	catn("Het " + H + " " + M);
+	catn("Mean_Nu_Muts " + MeanNuMuts);
+	catn("Mean_Mt_Muts " + MeanMtMuts);
+	catn("PopSize " + p1.individualCount);
+}
