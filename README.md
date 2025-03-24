@@ -1,5 +1,5 @@
-# Simulations-mito-nuclear-discordance
-Codes that have been used to test the correlation between mitonuclear discordance and sex biased dispersal using SLiM
+# Simulations mito-nuclear discordance and sex-biased dispersal correlation in SLiM
+Codes that have been used to test the correlation between mito-nuclear discordance and sex-biased dispersal using SLiM
 
 To run the simulations we used the following scripts:
 
